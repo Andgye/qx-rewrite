@@ -1,82 +1,92 @@
 /*
- * pdd_capture.js — 拼多多 Cookie 抓取
+ * pdd_capture.js —— 拼多多 AccessToken / anti-token 捕获
  * 类型：Quantumult X  script-request-header
  *
- * 逻辑：从任意 *.yangkeduo.com / *.pinduoduo.com 请求头里提取关键 Cookie，
- *       拼成一行存进 $prefs["PDD_CK"]，首次或变化时弹通知。
+ * 存储键（必须与 qx_pdd_app_orchard.js 一致）：
+ *   qx_pdd_app_token       ← 请求头 accesstoken
+ *   qx_pdd_anti_token      ← 请求头 anti-token
+ *   qx_pdd_notify_time     ← 上次弹窗时间（限流用）
  *
- * 注意：必须调用 $done({})，否则 QX 会让该请求挂起到超时。
+ * 通知策略：token 变了才写库；但弹窗最多每 30 分钟一次，
+ * 避免拼多多每次请求都带不同 token 导致通知刷屏。
+ * 想彻底静音：把 SILENT 改成 true。
  */
 
-var CK_KEY = "PDD_CK";
-var WANT = [
-  "PDDAccessToken",
-  "pdd_user_id",
-  "pdd_user_uin",
-  "api_uid",
-  "_nano_fp",
-  "msa",
-  "d04",
-  "d11"
-];
+var TOKEN_KEY = "qx_pdd_app_token";
+var ANTI_KEY = "qx_pdd_anti_token";
+var TIME_KEY = "qx_pdd_app_token_time";
+var NOTIFY_KEY = "qx_pdd_notify_time";
+
+var SILENT = false;
+var NOTIFY_GAP_MS = 30 * 60 * 1000;   // 30 分钟
+
+function header(headers, name) {
+  if (!headers) return "";
+  var target = String(name).toLowerCase();
+  var keys = Object.keys(headers);
+  for (var i = 0; i < keys.length; i++) {
+    if (String(keys[i]).toLowerCase() === target) {
+      var v = headers[keys[i]];
+      return Array.isArray(v) ? v.join("") : String(v === undefined || v === null ? "" : v);
+    }
+  }
+  return "";
+}
 
 var finished = false;
-
 function finish() {
   if (finished) return;
   finished = true;
   if (typeof $done === "function") $done({});
 }
 
+function get(key) {
+  try { return $prefs.valueForKey(key); } catch (e) { return null; }
+}
+function set(value, key) {
+  try { $prefs.setValueForKey(value, key); } catch (e) {}
+}
+
 (function () {
   try {
     if (typeof $request === "undefined" || !$request) return;
 
-    var h = $request.headers || {};
-    var cookie = h.Cookie || h.cookie || "";
-    cookie = String(cookie);
-    if (!cookie) return;
+    var headers = $request.headers || {};
+    var token = header(headers, "accesstoken");
+    var anti = header(headers, "anti-token");
 
-    var map = {};
-    cookie.split(";").forEach(function (seg) {
-      var i = seg.indexOf("=");
-      if (i <= 0) return;
-      var k = seg.slice(0, i).trim();
-      var v = seg.slice(i + 1).trim();
-      if (k) map[k] = v;
-    });
+    if (!token) return;
 
-    var out = [];
-    WANT.forEach(function (k) {
-      if (map[k]) out.push(k + "=" + map[k]);
-    });
+    var now = Date.now();
+    var old = get(TOKEN_KEY) || "";
 
-    // 关键字段一个都没抓到就不写入，避免把已有数据覆盖成空
-    if (!out.length) return;
+    if (token !== old) {
+      set(token, TOKEN_KEY);
+      set(String(now), TIME_KEY);
 
-    var ck = out.join("; ");
-    var old = null;
-    if (typeof $prefs !== "undefined" && $prefs.valueForKey) {
-      try { old = $prefs.valueForKey(CK_KEY); } catch (e) {}
-    }
-    if (old === ck) return;
-
-    if (typeof $prefs !== "undefined" && $prefs.setValueForKey) {
-      try {
-        $prefs.setValueForKey(ck, CK_KEY);
-        $prefs.setValueForKey(String(Date.now()), CK_KEY + "_TIME");
-      } catch (e) {}
+      var lastNotify = parseInt(get(NOTIFY_KEY) || "0", 10) || 0;
+      if (!SILENT && now - lastNotify >= NOTIFY_GAP_MS) {
+        set(String(now), NOTIFY_KEY);
+        if (typeof $notify === "function") {
+          try {
+            $notify("拼多多 AccessToken 已更新",
+                    token.slice(0, 6) + "***" + token.slice(-6),
+                    "长度 " + token.length);
+          } catch (e) {}
+        }
+      }
+      console.log("[PDD] token 更新，长度 " + token.length);
     }
 
-    if (typeof $notify === "function") {
-      try {
-        $notify("拼多多 CK 已更新", "pdd_user_id=" + (map["pdd_user_id"] || "-"),
-                "长度 " + ck.length + " 字符");
-      } catch (e) {}
+    if (anti) {
+      var oldAnti = get(ANTI_KEY) || "";
+      if (anti !== oldAnti) {
+        set(anti, ANTI_KEY);
+        console.log("[PDD] anti-token 更新");
+      }
     }
-    console.log("[PDD_CK] " + ck);
   } catch (e) {
-    console.log("[PDD_CK] error: " + e);
+    console.log("[PDD] capture error: " + e);
   } finally {
     finish();
   }
