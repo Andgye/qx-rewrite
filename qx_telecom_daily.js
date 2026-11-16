@@ -1,4 +1,5 @@
 const defaultConfig = {
+  MANUAL_PHONE: "",
   ENABLE_SIGN: true,
   ENABLE_CONTINUE_LOTTERY: true,
   ENABLE_HOME_TASKS: true,
@@ -467,6 +468,13 @@ async function runDaily(options) {
       auth = {};
     }
     auth.hosts = auth.hosts || {};
+    const manualPhone = String(config.MANUAL_PHONE || "").replace(/\D/g, "");
+    if (/^1[3-9]\d{9}$/.test(manualPhone) && auth.phone !== manualPhone) {
+      auth.phone = manualPhone;
+      try {
+        env.prefs.setValueForKey(JSON.stringify(auth), "qx_telecom_auth");
+      } catch (error) {}
+    }
     const wap = auth.hosts[WAP_HOST] || {};
     if (!auth.phone || !wap.sign || !wap.cookie) {
       throw createError("缺少电信登录态，请先打开营业厅活动页", true);
