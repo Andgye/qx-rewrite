@@ -328,7 +328,8 @@ test("password login obtains token, ticket and sign without captured auth", asyn
           headers: {},
           body: JSON.stringify({
             responseData: {
-              resultCode: "0000",
+              resultCode: "10000",
+              resultDesc: "操作成功",
               data: {
                 loginSuccessResult: {
                   userId: "manual-user",
