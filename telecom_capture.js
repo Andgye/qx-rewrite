@@ -7,7 +7,9 @@
 
 var AUTH_KEY = "qx_telecom_auth";
 var NOTIFY_KEY = "qx_telecom_notify_time";
+var STATUS_KEY = "qx_telecom_status";
 var NOTIFY_GAP_MS = 30 * 60 * 1000;
+var STATUS_GAP_MS = 60 * 60 * 1000;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value || {}));
@@ -106,6 +108,23 @@ function normalizePhone(value) {
   return "";
 }
 
+function findPhoneInText(value) {
+  var text = String(value || "");
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      text = decodeURIComponent(text);
+    } catch (error) {}
+  }
+  var direct = text.match(/1[3-9]\d{9}/);
+  if (direct) return direct[0];
+  if (/^[\[{]/.test(text)) {
+    try {
+      return findPhone(JSON.parse(text), 0);
+    } catch (error) {}
+  }
+  return "";
+}
+
 var PHONE_FIELDS = [
   "phone",
   "phoneNum",
@@ -144,7 +163,7 @@ function findPhone(value, depth) {
 }
 
 function parseBodyMetadata(body) {
-  if (!body) return { phone: "", token: "", userId: "" };
+  if (!body) return { phone: "", token: "", userId: "", sign: "" };
   var parsed = body;
   if (typeof body === "string") {
     try {
@@ -154,6 +173,7 @@ function parseBodyMetadata(body) {
         phone: normalizePhone(body),
         token: "",
         userId: "",
+        sign: "",
       };
     }
   }
@@ -161,6 +181,7 @@ function parseBodyMetadata(body) {
     phone: findPhone(parsed, 0),
     token: findNamedValue(parsed, ["token", "accessToken", "loginToken"], 0),
     userId: findNamedValue(parsed, ["userId", "userID", "uid"], 0),
+    sign: findNamedValue(parsed, ["sign"], 0),
   };
 }
 
@@ -213,12 +234,13 @@ function captureEvent(event, previousAuth) {
   var responseHeaders = (response && response.headers) || {};
   var body = request
     ? parseBodyMetadata(request.body)
-    : { phone: "", token: "", userId: "" };
+    : { phone: "", token: "", userId: "", sign: "" };
   if (response && response.body) {
     var responseBody = parseBodyMetadata(response.body);
     if (!body.phone && responseBody.phone) body.phone = responseBody.phone;
     if (!body.token && responseBody.token) body.token = responseBody.token;
     if (!body.userId && responseBody.userId) body.userId = responseBody.userId;
+    if (!body.sign && responseBody.sign) body.sign = responseBody.sign;
   }
   var headerPhone = [
     headerValue(requestHeaders, "x-user-phone"),
@@ -230,6 +252,17 @@ function captureEvent(event, previousAuth) {
   ]
     .map(normalizePhone)
     .find(Boolean);
+  var requestCookie = headerValue(requestHeaders, "cookie");
+  if (!headerPhone) {
+    var headerKeys = Object.keys(requestHeaders);
+    for (var headerIndex = 0; headerIndex < headerKeys.length; headerIndex++) {
+      headerPhone = findPhoneInText(requestHeaders[headerKeys[headerIndex]]);
+      if (headerPhone) break;
+    }
+  }
+  if (!headerPhone && requestCookie) {
+    headerPhone = findPhoneInText(requestCookie);
+  }
 
   var ticket =
     queryValue(url, "ticket") ||
@@ -239,7 +272,6 @@ function captureEvent(event, previousAuth) {
   if (headerPhone || body.phone) auth.phone = headerPhone || body.phone;
 
   var hostValues = {};
-  var requestCookie = headerValue(requestHeaders, "cookie");
   if (requestCookie) hostValues.cookie = requestCookie;
   var setCookie = responseHeaders["set-cookie"] || responseHeaders["Set-Cookie"];
   if (setCookie) {
@@ -263,6 +295,7 @@ function captureEvent(event, previousAuth) {
   });
   if (body.token) hostValues.token = body.token;
   if (body.userId) hostValues.userId = body.userId;
+  if (body.sign) hostValues.sign = body.sign;
   mergeHost(auth, host, hostValues);
   auth.updatedAt = Date.now();
   return auth;
@@ -286,7 +319,11 @@ function main() {
   $prefs.setValueForKey(JSON.stringify(next), AUTH_KEY);
 
   var wap = next.hosts["wappark.189.cn"] || {};
-  var ready = Boolean(next.phone && wap.sign && wap.cookie);
+  var missing = [];
+  if (!next.phone) missing.push("手机号");
+  if (!wap.cookie) missing.push("WAP Cookie");
+  if (!wap.sign) missing.push("sign 签名");
+  var ready = missing.length === 0;
   var lastNotify = 0;
   try {
     lastNotify = parseInt($prefs.valueForKey(NOTIFY_KEY) || "0", 10) || 0;
@@ -300,6 +337,40 @@ function main() {
       "登录态已抓取",
       next.phone.slice(0, 3) + "****" + next.phone.slice(-4)
     );
+  } else if (
+    hostFromURL(
+      String(
+        (typeof $request !== "undefined" && $request && $request.url) ||
+          (typeof $response !== "undefined" && $response && $response.url) ||
+          ""
+      )
+    ) === "wappark.189.cn"
+  ) {
+    var status = missing.join("|");
+    var lastStatus = "";
+    try {
+      lastStatus = $prefs.valueForKey(STATUS_KEY) || "";
+    } catch (error) {
+      lastStatus = "";
+    }
+    var parts = lastStatus.split("|", 2);
+    var lastMissing = parts[0] || "";
+    var lastStatusTime = parseInt(parts[1] || "0", 10) || 0;
+    if (
+      lastMissing !== status ||
+      Date.now() - lastStatusTime >= STATUS_GAP_MS
+    ) {
+      $prefs.setValueForKey(status + "|" + Date.now(), STATUS_KEY);
+      $notify(
+        "电信营业厅",
+        "登录态抓取不完整",
+        "缺少：" +
+          missing.join("、") +
+          (missing.indexOf("手机号") >= 0
+            ? "\n请完全退出电信 App 后重新登录一次。"
+            : "\n请确认重写、MITM 与活动页请求头均正常。")
+      );
+    }
   }
   if (
     typeof $response !== "undefined" &&
