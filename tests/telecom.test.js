@@ -166,6 +166,42 @@ test("capture stores sign returned by the WAP SSO response body", () => {
   assert.equal(next.hosts["wappark.189.cn"].sign, "body-sign");
 });
 
+test("capture extracts a phone from a non-JSON app login XML body", () => {
+  const next = captureEvent(
+    {
+      request: {
+        url: "https://appgologin.189.cn:9031/map/clientXML",
+        headers: {},
+        body:
+          "<Request><UserLoginName>13800138000</UserLoginName></Request>",
+      },
+    },
+    {}
+  );
+
+  assert.equal(next.phone, PHONE);
+});
+
+test("capture extracts a phone from a JWT sign token", () => {
+  const payload = Buffer.from(
+    JSON.stringify({ phone: PHONE, exp: 1700000000 })
+  ).toString("base64url");
+  const next = captureEvent(
+    {
+      request: {
+        url: "https://wappark.189.cn/jt-sign/webSign/homepage",
+        headers: {
+          Cookie: "SESSION=abc",
+          sign: "header." + payload + ".signature",
+        },
+      },
+    },
+    {}
+  );
+
+  assert.equal(next.phone, PHONE);
+});
+
 test("capture stores login token and userId from a nested response body", () => {
   const next = captureEvent(
     {
@@ -839,6 +875,43 @@ test("capture response-body mode preserves the original response body", () => {
 
   vm.runInNewContext(source, sandbox, { filename: "telecom_capture.js" });
   assert.equal(doneBody, responseBody);
+});
+
+test("capture request-body mode preserves the original request body", () => {
+  const source = fs.readFileSync(
+    require.resolve("../telecom_capture.js"),
+    "utf8"
+  );
+  let doneBody = null;
+  const requestBody =
+    "<Request><UserLoginName>13800138000</UserLoginName></Request>";
+  const sandbox = {
+    console: { log() {} },
+    JSON,
+    Date,
+    encodeURIComponent,
+    decodeURIComponent,
+    parseInt,
+    $prefs: {
+      valueForKey() {
+        return "";
+      },
+      setValueForKey() {},
+    },
+    $request: {
+      url: "https://appgologin.189.cn:9031/map/clientXML",
+      headers: {},
+      body: requestBody,
+    },
+    $response: null,
+    $notify() {},
+    $done(value) {
+      doneBody = value && value.body;
+    },
+  };
+
+  vm.runInNewContext(source, sandbox, { filename: "telecom_capture.js" });
+  assert.equal(doneBody, requestBody);
 });
 
 test("WAP capture reports the missing field instead of staying silent", () => {
