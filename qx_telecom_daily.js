@@ -1,5 +1,7 @@
 const defaultConfig = {
   MANUAL_PHONE: "",
+  MANUAL_PASSWORD: "",
+  USE_PASSWORD_LOGIN: true,
   ENABLE_SIGN: true,
   ENABLE_CONTINUE_LOTTERY: true,
   ENABLE_HOME_TASKS: true,
@@ -12,11 +14,26 @@ const defaultConfig = {
 };
 
 const AES_KEY = "34d7cb0bcdf07523";
+const LOGIN_PUBLIC_KEY =
+  "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDBkLT15ThVgz6/NOl6s8GNPofd" +
+  "WzWbCkWnkaAm7O2LjkM1H7dMvzkiqdxU02jamGRHLX/ZNMCXHnPcW/sDhiFCBN18" +
+  "qFvy8g6VYb9QtroI09e176s+ZCtiv7hbin2cCTj99iUpnEloZm19lwHyo69u5UMiP" +
+  "Mpq0/XKBO8lYhN/gwIDAQAB";
+const TICKET_KEY = "1234567`90koiuyhgtfrdews";
 const PARAM_PUBLIC_KEY =
   "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQC+ugG5A8cZ3FqUKDwM57GM4io6" +
   "JGcStivT8UdGt67PEOihLZTw3P7371+N47PrmsCpnTRzbTgcupKtUv8ImZalYk65d" +
   "U8rjC/ridwhw9ffW2LBwvkEnDkkKKRi2liWIItDftJVBiWOh17o6gfbPoNrWORcA" +
   "dcbpk2L+udld5kZNwIDAQAB";
+
+let CRYPTO_JS = null;
+if (typeof module !== "undefined") {
+  try {
+    CRYPTO_JS = require("./crypto-js.min.js");
+  } catch (error) {
+    CRYPTO_JS = null;
+  }
+}
 
 function utf8Bytes(text) {
   const bytes = [];
@@ -195,6 +212,43 @@ function aesCbcPkcs7Encrypt(text, key, iv) {
   return bytesToHex(cipher);
 }
 
+function tripleDesCbcPkcs7Encrypt(text, key, iv) {
+  if (!CRYPTO_JS) throw new Error("CryptoJS is not loaded");
+  const ivBytes =
+    typeof iv === "string" ? hexToBytes(iv) : Array.from(iv || []);
+  if (ivBytes.length !== 8) throw new Error("3DES requires an 8-byte IV");
+  const encrypted = CRYPTO_JS.TripleDES.encrypt(
+    CRYPTO_JS.enc.Utf8.parse(String(text)),
+    CRYPTO_JS.enc.Utf8.parse(String(key)),
+    {
+      mode: CRYPTO_JS.mode.CBC,
+      padding: CRYPTO_JS.pad.Pkcs7,
+      iv: CRYPTO_JS.enc.Hex.parse(bytesToHex(ivBytes)),
+    }
+  );
+  return encrypted.ciphertext.toString(CRYPTO_JS.enc.Hex).toUpperCase();
+}
+
+function tripleDesCbcPkcs7Decrypt(ciphertext, key, iv) {
+  if (!CRYPTO_JS) throw new Error("CryptoJS is not loaded");
+  const ivBytes =
+    typeof iv === "string" ? hexToBytes(iv) : Array.from(iv || []);
+  if (ivBytes.length !== 8) throw new Error("3DES requires an 8-byte IV");
+  const params = CRYPTO_JS.lib.CipherParams.create({
+    ciphertext: CRYPTO_JS.enc.Hex.parse(String(ciphertext || "")),
+  });
+  const decrypted = CRYPTO_JS.TripleDES.decrypt(
+    params,
+    CRYPTO_JS.enc.Utf8.parse(String(key)),
+    {
+      mode: CRYPTO_JS.mode.CBC,
+      padding: CRYPTO_JS.pad.Pkcs7,
+      iv: CRYPTO_JS.enc.Hex.parse(bytesToHex(ivBytes)),
+    }
+  );
+  return decrypted.toString(CRYPTO_JS.enc.Utf8);
+}
+
 const BASE64_ALPHABET =
   "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -329,6 +383,7 @@ const XBK_PUBLIC_KEY =
   "XLKEAJclopJqoO95o8W63Euq6K+AKMzyZt1SEqtZ0mXsN8UPnuN/5aoB3kbPLYpfEwBb" +
   "hto6yrwIDAQAB";
 
+const APP_HOST = "appgologin.189.cn";
 const WAP_HOST = "wappark.189.cn";
 const XBK_HOST = "xbk.189.cn";
 const MALL_HOST = "wapact.189.cn";
@@ -350,6 +405,78 @@ function numberValue(value, fallback) {
 
 function listed(value) {
   return Array.isArray(value) ? value : [];
+}
+
+function parseCookieText(text) {
+  const jar = {};
+  String(text || "")
+    .split(";")
+    .forEach(function (part) {
+      const item = part.trim();
+      const pos = item.indexOf("=");
+      if (pos > 0) jar[item.slice(0, pos)] = item.slice(pos + 1);
+    });
+  return jar;
+}
+
+function mergeCookieText(base, incoming) {
+  const jar = parseCookieText(base);
+  const next = parseCookieText(incoming);
+  Object.keys(next).forEach(function (key) {
+    jar[key] = next[key];
+  });
+  return Object.keys(jar)
+    .map(function (key) {
+      return key + "=" + jar[key];
+    })
+    .join("; ");
+}
+
+function mergeSetCookieText(base, values) {
+  let cookie = String(base || "");
+  listed(values).forEach(function (raw) {
+    String(raw || "")
+      .split(/,(?=\s*[^=;,]+=)/)
+      .forEach(function (line) {
+        const first = line.split(";")[0].trim();
+        const pos = first.indexOf("=");
+        if (pos <= 0) return;
+        cookie = mergeCookieText(cookie, first);
+      });
+  });
+  return cookie;
+}
+
+function shiftCharacters(value, amount) {
+  return Array.from(String(value || ""))
+    .map(function (char) {
+      return String.fromCharCode(char.charCodeAt(0) + amount);
+    })
+    .join("");
+}
+
+function randomHex(length) {
+  const chars = "0123456789abcdef";
+  let output = "";
+  for (let i = 0; i < length; i++) {
+    output += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return output;
+}
+
+function formatTimestamp(timestamp) {
+  const date = new Date(timestamp);
+  const pad = function (value) {
+    return (value < 10 ? "0" : "") + value;
+  };
+  return (
+    date.getFullYear() +
+    pad(date.getMonth() + 1) +
+    pad(date.getDate()) +
+    pad(date.getHours()) +
+    pad(date.getMinutes()) +
+    pad(date.getSeconds())
+  );
 }
 
 function maskPhone(phone) {
@@ -471,13 +598,6 @@ async function runDaily(options) {
     const manualPhone = String(config.MANUAL_PHONE || "").replace(/\D/g, "");
     if (/^1[3-9]\d{9}$/.test(manualPhone) && auth.phone !== manualPhone) {
       auth.phone = manualPhone;
-      try {
-        env.prefs.setValueForKey(JSON.stringify(auth), "qx_telecom_auth");
-      } catch (error) {}
-    }
-    const wap = auth.hosts[WAP_HOST] || {};
-    if (!auth.phone || !wap.sign || !wap.cookie) {
-      throw createError("缺少电信登录态，请先打开营业厅活动页", true);
     }
     xbkAuthorization = (auth.hosts[XBK_HOST] || {}).authorization || "";
     mallAuthorization = (auth.hosts[MALL_HOST] || {}).authorization || "";
@@ -523,6 +643,263 @@ async function runDaily(options) {
       data,
       text,
     };
+  }
+
+  async function ensureCryptoJS() {
+    if (CRYPTO_JS && CRYPTO_JS.TripleDES) return;
+    let source = "";
+    try {
+      source = env.prefs.valueForKey("qx_crypto_js") || "";
+    } catch (error) {
+      source = "";
+    }
+    if (source.length < 10000) {
+      const response = await env.transport({
+        url:
+          "https://raw.githubusercontent.com/Andgye/qx-rewrite/main/crypto-js.min.js",
+        method: "GET",
+        headers: { Accept: "*/*" },
+        timeout: 20000,
+      });
+      source =
+        response && response.body !== undefined
+          ? String(response.body)
+          : "";
+      if (source.length < 10000) throw new Error("CryptoJS 下载失败");
+      try {
+        env.prefs.setValueForKey(source, "qx_crypto_js");
+      } catch (error) {}
+    }
+    const shim = { exports: {} };
+    new Function("module", "exports", source)(shim, shim.exports);
+    CRYPTO_JS =
+      shim.exports && shim.exports.TripleDES
+        ? shim.exports
+        : globalThis.CryptoJS;
+    if (!CRYPTO_JS || !CRYPTO_JS.TripleDES) {
+      throw new Error("CryptoJS 初始化失败");
+    }
+  }
+
+  async function loginWithPassword() {
+    const timestamp = formatTimestamp(env.now());
+    const uuid = [
+      randomHex(8),
+      randomHex(4),
+      "4" + randomHex(3),
+      randomHex(4),
+      randomHex(12),
+    ];
+    const phoneCipher = shiftCharacters(auth.phone, 2);
+    const passwordCipher = shiftCharacters(config.MANUAL_PASSWORD, 2);
+    const authSource =
+      "iPhone 14 15.4." +
+      uuid.slice(0, 2).join("") +
+      auth.phone +
+      timestamp +
+      config.MANUAL_PASSWORD +
+      "0$$$0.";
+    const response = await request(
+      APP_HOST,
+      "https://appgologin.189.cn:9031/login/client/userLoginNormal",
+      {
+        options: {
+          method: "POST",
+          body: JSON.stringify({
+            headerInfos: {
+              code: "userLoginNormal",
+              timestamp,
+              broadAccount: "",
+              broadToken: "",
+              clientType: "#10.5.0#channel50#iPhone 14 Pro Max#",
+              shopId: "20002",
+              source: "110003",
+              sourcePassword: "Sid98s",
+              token: "",
+              userLoginName: phoneCipher,
+            },
+            content: {
+              attach: "test",
+              fieldData: {
+                loginType: "4",
+                accountType: "",
+                loginAuthCipherAsymmertric: rsaPkcs1Encrypt(
+                  authSource,
+                  LOGIN_PUBLIC_KEY
+                ),
+                deviceUid: uuid.slice(0, 3).join(""),
+                phoneNum: phoneCipher,
+                isChinatelecom: "0",
+                systemVersion: "15.4.0",
+                authentication: passwordCipher,
+              },
+            },
+          }),
+        },
+      }
+    );
+    const responseData = response.data && response.data.responseData;
+    if (!responseData || String(responseData.resultCode) !== "0000") {
+      throw new Error(
+        "服务密码登录失败: " +
+          String(
+            (response.data &&
+              (response.data.msg ||
+                (response.data.headerInfos &&
+                  response.data.headerInfos.reason))) ||
+              (responseData && responseData.resultDesc) ||
+              "账号或密码不正确"
+          )
+      );
+    }
+    const login = responseData.data && responseData.data.loginSuccessResult;
+    if (!login || !login.userId || !login.token) {
+      throw new Error("服务密码登录未返回 userId/token");
+    }
+    auth.hosts[APP_HOST] = Object.assign({}, auth.hosts[APP_HOST] || {}, {
+      userId: String(login.userId),
+      token: String(login.token),
+      userAgent: headersFor(auth, APP_HOST, true)["User-Agent"],
+    });
+    report("服务密码登录成功");
+  }
+
+  async function getTicket() {
+    const login = auth.hosts[APP_HOST] || {};
+    if (!login.userId || !login.token) {
+      throw new Error("缺少服务密码登录 token");
+    }
+    const targetId = tripleDesCbcPkcs7Encrypt(
+      login.userId,
+      TICKET_KEY,
+      "0000000000000000"
+    );
+    const xml =
+      "<Request>" +
+      "<HeaderInfos>" +
+      "<Code>getSingle</Code>" +
+      "<Timestamp>" +
+      formatTimestamp(env.now()) +
+      "</Timestamp>" +
+      "<SourcePassword>Sid98s</SourcePassword>" +
+      "<Source>110003</Source>" +
+      "<ShopId>20002</ShopId>" +
+      "<ClientType>#9.6.1#channel50#iPhone 14 Pro Max#</ClientType>" +
+      "<BroadToken></BroadToken>" +
+      "<BroadAccount></BroadAccount>" +
+      "<Token>" +
+      login.token +
+      "</Token>" +
+      "<UserLoginName>" +
+      auth.phone +
+      "</UserLoginName>" +
+      "</HeaderInfos>" +
+      "<Content>" +
+      "<Attach>test</Attach>" +
+      "<FieldData>" +
+      "<TargetId>" +
+      targetId +
+      "</TargetId>" +
+      "<Url>4a6862274835b451</Url>" +
+      "</FieldData>" +
+      "</Content>" +
+      "</Request>";
+    const response = await request(
+      APP_HOST,
+      "https://appgologin.189.cn:9031/map/clientXML",
+      {
+        options: {
+          method: "POST",
+          body: xml,
+          headers: {
+            "Content-Type": "text/xml;charset=UTF-8",
+          },
+        },
+      }
+    );
+    const match = String(response.text || "").match(
+      /<Ticket>([^<]+)<\/Ticket>/i
+    );
+    if (!match) throw new Error("ticket 接口没有返回 Ticket");
+    auth.ticket = tripleDesCbcPkcs7Decrypt(
+      match[1],
+      TICKET_KEY,
+      "0000000000000000"
+    );
+    if (!auth.ticket) throw new Error("ticket 解密失败");
+    report("ticket 获取成功");
+  }
+
+  async function getSign() {
+    if (!auth.ticket) throw new Error("缺少 ticket，无法获取 sign");
+    const response = await request(
+      WAP_HOST,
+      "https://wappark.189.cn/jt-sign/ssoHomLogin?ticket=" +
+        encodeURIComponent(auth.ticket),
+      { options: { method: "GET" } }
+    );
+    if (!isSuccess(response.data) || !response.data.sign) {
+      throw new Error(
+        "sign 获取失败: " +
+          String(response.data.msg || response.data.resoultMsg || "未知")
+      );
+    }
+    const setCookie =
+      response.headers["set-cookie"] || response.headers["Set-Cookie"];
+    auth.hosts[WAP_HOST] = Object.assign({}, auth.hosts[WAP_HOST] || {}, {
+      cookie: mergeSetCookieText(
+        (auth.hosts[WAP_HOST] && auth.hosts[WAP_HOST].cookie) || "",
+        Array.isArray(setCookie) ? setCookie : listed(setCookie)
+      ),
+      sign: String(response.data.sign),
+      userAgent: headersFor(auth, WAP_HOST, false)["User-Agent"],
+    });
+    report("WAP sign 获取成功");
+  }
+
+  async function prepareAuth() {
+    loadAuth();
+    const manualPhone = String(config.MANUAL_PHONE || "").replace(/\D/g, "");
+    const manualPassword = String(config.MANUAL_PASSWORD || "");
+    const usePassword =
+      config.USE_PASSWORD_LOGIN &&
+      /^1[3-9]\d{9}$/.test(manualPhone) &&
+      manualPassword.length > 0;
+    if (usePassword) {
+      auth.phone = manualPhone;
+      try {
+        await ensureCryptoJS();
+        await loginWithPassword();
+        await getTicket();
+        await getSign();
+        auth.updatedAt = env.now();
+        env.prefs.setValueForKey(
+          JSON.stringify(auth),
+          "qx_telecom_auth"
+        );
+        return;
+      } catch (error) {
+        const wap = auth.hosts[WAP_HOST] || {};
+        if (auth.phone && wap.sign && wap.cookie) {
+          report(
+            "服务密码自动登录失败，改用已抓取登录态: " +
+              String(error.message || error)
+          );
+          return;
+        }
+        throw error;
+      }
+    }
+    const wap = auth.hosts[WAP_HOST] || {};
+    if (!auth.phone || !wap.sign || !wap.cookie) {
+      throw createError(
+        "缺少电信登录态，请填写 MANUAL_PHONE/MANUAL_PASSWORD 或先抓取活动页",
+        true
+      );
+    }
+    try {
+      env.prefs.setValueForKey(JSON.stringify(auth), "qx_telecom_auth");
+    } catch (error) {}
   }
 
   function parameter(phone) {
@@ -1114,7 +1491,7 @@ async function runDaily(options) {
   }
 
   try {
-    loadAuth();
+    await prepareAuth();
     report("账号 " + maskPhone(auth.phone));
     await runStage("金豆余额查询", function () {
       return userCoinInfo(false);
@@ -1186,6 +1563,7 @@ if (typeof module !== "undefined") {
     defaultConfig,
     rsaPkcs1Encrypt,
     runDaily,
+    tripleDesCbcPkcs7Encrypt,
   };
 } else if (typeof $task !== "undefined" && typeof $prefs !== "undefined") {
   let telecomFinished = false;
