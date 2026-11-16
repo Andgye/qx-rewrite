@@ -12,6 +12,7 @@ const {
   defaultConfig,
   rsaPkcs1Encrypt,
   runDaily,
+  tripleDesCbcPkcs7Encrypt,
 } = require("../qx_telecom_daily.js");
 
 const PHONE = "13800138000";
@@ -283,6 +284,130 @@ HanJlc3gJn6J
     Buffer.from(encrypted, "base64")
   );
   assert.equal(decrypted.toString("utf8"), "hello-qx");
+});
+
+test("TripleDES ticket encryption matches the standard 3DES-CBC vector", () => {
+  const key = "1234567`90koiuyhgtfrdews";
+  const iv = Buffer.alloc(8);
+  const encrypted = tripleDesCbcPkcs7Encrypt("user-123", key, iv);
+  const decipher = crypto.createDecipheriv(
+    "des-ede3-cbc",
+    Buffer.from(key),
+    iv
+  );
+  decipher.setAutoPadding(true);
+  const decrypted = Buffer.concat([
+    decipher.update(Buffer.from(encrypted, "hex")),
+    decipher.final(),
+  ]).toString("utf8");
+  assert.equal(decrypted, "user-123");
+});
+
+test("password login obtains token, ticket and sign without captured auth", async () => {
+  const prefs = memoryPrefs();
+  const ticket = "ticket-from-password";
+  const ticketCipher = crypto.createCipheriv(
+    "des-ede3-cbc",
+    Buffer.from("1234567`90koiuyhgtfrdews"),
+    Buffer.alloc(8)
+  );
+  const encryptedTicket = Buffer.concat([
+    ticketCipher.update(ticket, "utf8"),
+    ticketCipher.final(),
+  ]).toString("hex").toUpperCase();
+  const hits = [];
+
+  const result = await runDaily({
+    prefs,
+    transport: async function (request) {
+      const url = String(request.url);
+      hits.push({ url, body: request.body });
+      if (url.includes("/login/client/userLoginNormal")) {
+        return {
+          statusCode: 200,
+          headers: {},
+          body: JSON.stringify({
+            responseData: {
+              resultCode: "0000",
+              data: {
+                loginSuccessResult: {
+                  userId: "manual-user",
+                  token: "manual-token",
+                },
+              },
+            },
+          }),
+        };
+      }
+      if (url.includes("/map/clientXML")) {
+        return {
+          statusCode: 200,
+          headers: {},
+          body: "<Response><Ticket>" + encryptedTicket + "</Ticket></Response>",
+        };
+      }
+      if (url.includes("/jt-sign/ssoHomLogin")) {
+        return {
+          statusCode: 200,
+          headers: {
+            "set-cookie": ["WAP_SESSION=ready; Path=/"],
+          },
+          body: JSON.stringify({ resoultCode: 0, sign: "password-sign" }),
+        };
+      }
+      if (url.includes("/api/home/userCoinInfo")) {
+        return {
+          statusCode: 200,
+          headers: {},
+          body: JSON.stringify({ resoultCode: 0, totalCoin: 8 }),
+        };
+      }
+      if (url.includes("/api/home/userStatusInfo")) {
+        return {
+          statusCode: 200,
+          headers: {},
+          body: JSON.stringify({
+            resoultCode: 0,
+            data: { isSign: true, signDay: 2 },
+          }),
+        };
+      }
+      return {
+        statusCode: 200,
+        headers: {},
+        body: JSON.stringify({ resoultCode: 0 }),
+      };
+    },
+    notify() {},
+    wait: async function () {},
+    now: function () {
+      return 1700000000000;
+    },
+    config: Object.assign({}, defaultConfig, {
+      MANUAL_PHONE: PHONE,
+      MANUAL_PASSWORD: "service-password",
+      USE_PASSWORD_LOGIN: true,
+      ENABLE_CONTINUE_LOTTERY: false,
+      ENABLE_HOME_TASKS: false,
+      ENABLE_PET_FEED: false,
+      ENABLE_PET_RIGHTS: false,
+      ENABLE_MONTHLY_GIFT: false,
+      ENABLE_MALL_LOTTERY: false,
+    }),
+  });
+
+  const loginHit = hits.find((item) =>
+    item.url.includes("/login/client/userLoginNormal")
+  );
+  assert.ok(loginHit);
+  assert.ok(String(loginHit.body).includes("loginAuthCipherAsymmertric"));
+  assert.ok(!String(loginHit.body).includes("service-password"));
+  assert.ok(hits.some((item) => item.url.includes("/map/clientXML")));
+  assert.ok(hits.some((item) => item.url.includes("/jt-sign/ssoHomLogin")));
+  assert.equal(result.ok, true);
+  const saved = JSON.parse(prefs.valueForKey("qx_telecom_auth"));
+  assert.equal(saved.ticket, ticket);
+  assert.equal(saved.hosts["wappark.189.cn"].sign, "password-sign");
 });
 
 test("runDaily reaches every advertised Telecom activity", async () => {
