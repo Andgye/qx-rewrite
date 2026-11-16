@@ -739,7 +739,11 @@ async function runDaily(options) {
       }
     );
     const responseData = response.data && response.data.responseData;
-    if (!responseData || String(responseData.resultCode) !== "0000") {
+    const login =
+      responseData &&
+      responseData.data &&
+      responseData.data.loginSuccessResult;
+    if (!login || !login.userId || !login.token) {
       throw new Error(
         "服务密码登录失败: " +
           String(
@@ -751,10 +755,6 @@ async function runDaily(options) {
               "账号或密码不正确"
           )
       );
-    }
-    const login = responseData.data && responseData.data.loginSuccessResult;
-    if (!login || !login.userId || !login.token) {
-      throw new Error("服务密码登录未返回 userId/token");
     }
     auth.hosts[APP_HOST] = Object.assign({}, auth.hosts[APP_HOST] || {}, {
       userId: String(login.userId),
