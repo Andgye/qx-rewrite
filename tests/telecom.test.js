@@ -632,6 +632,54 @@ test("runDaily reports an expired live auth instead of retrying forever", async 
   );
 });
 
+test("runDaily can use a one-time manual phone with captured cookie and sign", async () => {
+  const prefs = memoryPrefs();
+  const auth = authFixture({ phone: "" });
+  prefs.setValueForKey(JSON.stringify(auth), "qx_telecom_auth");
+  const hits = [];
+
+  const result = await runDaily({
+    prefs,
+    transport: async function (request) {
+      const url = String(request.url);
+      hits.push(url);
+      if (url.includes("/api/home/userCoinInfo")) {
+        return {
+          statusCode: 200,
+          headers: {},
+          body: JSON.stringify({ resoultCode: 0, totalCoin: 12 }),
+        };
+      }
+      return {
+        statusCode: 200,
+        headers: {},
+        body: JSON.stringify({ resoultCode: 0, data: { isSign: true } }),
+      };
+    },
+    notify() {},
+    wait: async function () {},
+    now: function () {
+      return 1700000000000;
+    },
+    config: Object.assign({}, defaultConfig, {
+      MANUAL_PHONE: PHONE,
+      ENABLE_CONTINUE_LOTTERY: false,
+      ENABLE_HOME_TASKS: false,
+      ENABLE_PET_FEED: false,
+      ENABLE_PET_RIGHTS: false,
+      ENABLE_MONTHLY_GIFT: false,
+      ENABLE_MALL_LOTTERY: false,
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(hits.some((url) => url.includes("/api/home/userCoinInfo")));
+  assert.equal(
+    JSON.parse(prefs.valueForKey("qx_telecom_auth")).phone,
+    PHONE
+  );
+});
+
 test("a non-auth activity failure does not block later activities", async () => {
   const prefs = memoryPrefs();
   prefs.setValueForKey(JSON.stringify(authFixture()), "qx_telecom_auth");
@@ -914,7 +962,7 @@ test("capture request-body mode preserves the original request body", () => {
   assert.equal(doneBody, requestBody);
 });
 
-test("WAP capture reports the missing field instead of staying silent", () => {
+test("WAP capture separates ready CK from the missing phone", () => {
   const source = fs.readFileSync(
     require.resolve("../telecom_capture.js"),
     "utf8"
@@ -951,7 +999,7 @@ test("WAP capture reports the missing field instead of staying silent", () => {
   assert.ok(
     notifications.some(
       (item) =>
-        String(item.subtitle).includes("不完整") &&
+        String(item.subtitle).includes("Cookie") &&
         String(item.body).includes("手机号")
     )
   );
