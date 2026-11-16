@@ -134,6 +134,38 @@ test("capture keeps sign and ticket while refreshing cookies", () => {
   assert.equal(next.ticket, "ticket-456");
 });
 
+test("capture extracts a phone nested inside a WAP cookie", () => {
+  const next = captureEvent(
+    {
+      request: {
+        url: "https://wappark.189.cn/jt-sign/webSign/homepage",
+        headers: {
+          Cookie: "userInfo=" + encodeURIComponent('{"mobile":"13800138000"}'),
+          sign: "sign-captured",
+        },
+      },
+    },
+    {}
+  );
+
+  assert.equal(next.phone, PHONE);
+});
+
+test("capture stores sign returned by the WAP SSO response body", () => {
+  const next = captureEvent(
+    {
+      response: {
+        url: "https://wappark.189.cn/jt-sign/ssoHomLogin?ticket=ticket-1",
+        headers: {},
+        body: JSON.stringify({ resoultCode: 0, sign: "body-sign" }),
+      },
+    },
+    { phone: PHONE }
+  );
+
+  assert.equal(next.hosts["wappark.189.cn"].sign, "body-sign");
+});
+
 test("capture stores login token and userId from a nested response body", () => {
   const next = captureEvent(
     {
@@ -807,4 +839,47 @@ test("capture response-body mode preserves the original response body", () => {
 
   vm.runInNewContext(source, sandbox, { filename: "telecom_capture.js" });
   assert.equal(doneBody, responseBody);
+});
+
+test("WAP capture reports the missing field instead of staying silent", () => {
+  const source = fs.readFileSync(
+    require.resolve("../telecom_capture.js"),
+    "utf8"
+  );
+  const notifications = [];
+  const sandbox = {
+    console: { log() {} },
+    JSON,
+    Date,
+    encodeURIComponent,
+    decodeURIComponent,
+    parseInt,
+    $prefs: {
+      valueForKey() {
+        return "";
+      },
+      setValueForKey() {},
+    },
+    $request: {
+      url: "https://wappark.189.cn/jt-sign/webSign/homepage",
+      headers: {
+        Cookie: "SESSION=abc",
+        sign: "sign-captured",
+      },
+    },
+    $response: null,
+    $notify(title, subtitle, body) {
+      notifications.push({ title, subtitle, body });
+    },
+    $done() {},
+  };
+
+  vm.runInNewContext(source, sandbox, { filename: "telecom_capture.js" });
+  assert.ok(
+    notifications.some(
+      (item) =>
+        String(item.subtitle).includes("不完整") &&
+        String(item.body).includes("手机号")
+    )
+  );
 });
