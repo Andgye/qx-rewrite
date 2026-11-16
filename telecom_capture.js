@@ -117,12 +117,40 @@ function findPhoneInText(value) {
   }
   var direct = text.match(/1[3-9]\d{9}/);
   if (direct) return direct[0];
+  if (text.indexOf(".") > 0) {
+    var segments = text.split(".");
+    for (var segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+      var decodedSegment = base64DecodeText(segments[segmentIndex]);
+      var segmentPhone = decodedSegment.match(/1[3-9]\d{9}/);
+      if (segmentPhone) return segmentPhone[0];
+    }
+  }
   if (/^[\[{]/.test(text)) {
     try {
       return findPhone(JSON.parse(text), 0);
     } catch (error) {}
   }
   return "";
+}
+
+function base64DecodeText(value) {
+  var alphabet =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  var text = String(value || "").replace(/-/g, "+").replace(/_/g, "/");
+  var output = "";
+  var buffer = 0;
+  var bits = 0;
+  for (var i = 0; i < text.length; i++) {
+    var index = alphabet.indexOf(text.charAt(i));
+    if (index < 0) continue;
+    buffer = (buffer << 6) | index;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      output += String.fromCharCode((buffer >> bits) & 0xff);
+    }
+  }
+  return output;
 }
 
 var PHONE_FIELDS = [
@@ -170,7 +198,7 @@ function parseBodyMetadata(body) {
       parsed = JSON.parse(body);
     } catch (error) {
       return {
-        phone: normalizePhone(body),
+        phone: findPhoneInText(body),
         token: "",
         userId: "",
         sign: "",
@@ -378,6 +406,12 @@ function main() {
     $response.body !== undefined
   ) {
     $done({ body: $response.body });
+  } else if (
+    typeof $request !== "undefined" &&
+    $request &&
+    $request.body !== undefined
+  ) {
+    $done({ body: $request.body });
   } else {
     $done({});
   }
