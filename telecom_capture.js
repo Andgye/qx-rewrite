@@ -352,6 +352,7 @@ function main() {
   if (!wap.cookie) missing.push("WAP Cookie");
   if (!wap.sign) missing.push("sign 签名");
   var ready = missing.length === 0;
+  var sessionReady = Boolean(wap.cookie && wap.sign);
   var lastNotify = 0;
   try {
     lastNotify = parseInt($prefs.valueForKey(NOTIFY_KEY) || "0", 10) || 0;
@@ -384,19 +385,26 @@ function main() {
     var parts = lastStatus.split("|", 2);
     var lastMissing = parts[0] || "";
     var lastStatusTime = parseInt(parts[1] || "0", 10) || 0;
+    var statusTitle = sessionReady
+      ? "Cookie 已抓取"
+      : "登录态抓取不完整";
     if (
-      lastMissing !== status ||
+      lastMissing !== statusTitle + ":" + status ||
       Date.now() - lastStatusTime >= STATUS_GAP_MS
     ) {
-      $prefs.setValueForKey(status + "|" + Date.now(), STATUS_KEY);
+      $prefs.setValueForKey(
+        statusTitle + ":" + status + "|" + Date.now(),
+        STATUS_KEY
+      );
       $notify(
         "电信营业厅",
-        "登录态抓取不完整",
-        "缺少：" +
-          missing.join("、") +
-          (missing.indexOf("手机号") >= 0
-            ? "\n请完全退出电信 App 后重新登录一次。"
-            : "\n请确认重写、MITM 与活动页请求头均正常。")
+        statusTitle,
+        sessionReady
+          ? "Cookie 和 sign 已就绪，只缺手机号。\n" +
+              "请在本地 qx_telecom_daily.js 顶部 MANUAL_PHONE 填一次手机号。"
+          : "缺少：" +
+              missing.join("、") +
+              "\n请确认重写、MITM 与活动页请求头均正常。"
       );
     }
   }
